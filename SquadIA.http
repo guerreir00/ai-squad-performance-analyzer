@@ -1,0 +1,6 @@
+@SquadIA_HostAddress = http://localhost:5103
+
+GET {{SquadIA_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

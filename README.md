@@ -1,5 +1,13 @@
 # AI Squad Performance Analyzer
 
+![.NET](https://img.shields.io/badge/.NET-8.0-512BD4?logo=dotnet&logoColor=white)
+![ASP.NET Core](https://img.shields.io/badge/ASP.NET_Core-Web_API-512BD4?logo=dotnet&logoColor=white)
+![Entity Framework Core](https://img.shields.io/badge/EF_Core-8.0-512BD4?logo=dotnet&logoColor=white)
+![SQLite](https://img.shields.io/badge/SQLite-003B57?logo=sqlite&logoColor=white)
+![OpenAI](https://img.shields.io/badge/OpenAI-GPT--4o--mini-412991?logo=openai&logoColor=white)
+![Swagger](https://img.shields.io/badge/Swagger-UI-85EA2D?logo=swagger&logoColor=black)
+![License](https://img.shields.io/badge/license-MIT-green)
+
 API desenvolvida em .NET 8 para análise de performance de squads com apoio de Inteligência Artificial.
 
 O projeto recebe métricas operacionais de uma squad, envia essas informações para a IA, gera um diagnóstico estruturado e salva o histórico das análises em banco SQLite. Também disponibiliza endpoints para consulta de histórico, dashboard resumido, filtros e paginação.

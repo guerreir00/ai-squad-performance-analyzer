@@ -43,6 +43,103 @@ Demonstrar, na prática, como IA pode ser aplicada no contexto de liderança de 
 
 ---
 
+## Pré-requisitos
+
+- [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)
+- Chave de API da [OpenAI](https://platform.openai.com/api-keys)
+- Git
+
+---
+
+## Como rodar localmente
+
+### 1. Clone o repositório
+
+```bash
+git clone https://github.com/guerreir00/ai-squad-performance-analyzer.git
+cd ai-squad-performance-analyzer
+```
+
+### 2. Configure a chave da OpenAI
+
+Crie o arquivo `appsettings.Development.json` na raiz do projeto (já está no `.gitignore` — nunca commite a chave real):
+
+```json
+{
+  "OpenAI": {
+    "ApiKey": "sk-..."
+  }
+}
+```
+
+> A chave pode ser obtida em [platform.openai.com/api-keys](https://platform.openai.com/api-keys). O modelo usado é `gpt-4o-mini`.
+
+### 3. Aplique as migrations e rode
+
+```bash
+dotnet ef database update
+dotnet run
+```
+
+A API estará disponível em `http://localhost:5103`.
+
+### 4. Explore via Swagger
+
+Acesse `http://localhost:5103/swagger` para ver e testar todos os endpoints interativamente.
+
+---
+
+## Exemplos de uso
+
+### Analisar uma squad
+
+```bash
+curl -X POST http://localhost:5103/api/squad/analisar \
+  -H "Content-Type: application/json" \
+  -d '{
+    "nomeSquad": "Squad Alpha",
+    "leadTimeMedio": 5,
+    "throughput": 12,
+    "bugsCriticos": 2,
+    "blockers": 1,
+    "observacoes": "Sprint com muitas reuniões e dependências externas não resolvidas"
+  }'
+```
+
+Resposta esperada:
+
+```json
+{
+  "diagnostico": "A squad apresenta lead time elevado...",
+  "resumoExecutivo": "Performance abaixo do esperado com 2 bugs críticos ativos.",
+  "problemas": ["Lead time acima da média", "Blockers não resolvidos"],
+  "acoes": ["Mapear e remover dependências externas", "Revisar cerimônias para reduzir overhead"],
+  "scoresSaude": 62,
+  "prioridade": "Alta"
+}
+```
+
+### Consultar histórico
+
+```bash
+# Todos os registros (paginado)
+curl "http://localhost:5103/api/squad/historico?page=1&pageSize=10"
+
+# Filtrar por squad e período
+curl "http://localhost:5103/api/squad/historico?nomeSquad=Squad+Alpha&dataInicio=2024-01-01&dataFim=2024-12-31"
+
+# Buscar por ID
+curl "http://localhost:5103/api/squad/historico/1"
+```
+
+### Ver dashboard geral
+
+```bash
+curl http://localhost:5103/api/squad/dashboard
+```
+
+---
+
 ## Estrutura do projeto
 
 ```bash

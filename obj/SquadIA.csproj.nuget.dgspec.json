@@ -65,7 +65,7 @@
             },
             "OpenAI": {
               "target": "Package",
-              "version": "[*, )"
+              "version": "[2.3.0, )"
             },
             "Swashbuckle.AspNetCore": {
               "target": "Package",

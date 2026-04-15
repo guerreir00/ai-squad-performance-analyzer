@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Microsoft.Extensions.Logging;
 using OpenAI.Chat;
 using SquadIA.Models;
 
@@ -6,18 +7,20 @@ namespace SquadIA.Services;
 
 public class IAService
 {
-    private readonly string _apiKey;
+    private readonly ChatClient _chatClient;
+    private readonly ILogger<IAService> _logger;
+    private static readonly TimeSpan TimeoutAnalise = TimeSpan.FromSeconds(30);
 
-    public IAService(IConfiguration configuration)
+    public IAService(ChatClient chatClient, ILogger<IAService> logger)
     {
-        _apiKey = configuration["OpenAI:ApiKey"]
-            ?? throw new InvalidOperationException("OpenAI:ApiKey não configurada.");
+        _chatClient = chatClient;
+        _logger = logger;
     }
 
-    public async Task<AnaliseResultado> AnalisarSquadAsync(SquadMetrics squad)
+    public async Task<AnaliseResultado> AnalisarSquadAsync(
+        SquadMetrics squad,
+        CancellationToken cancellationToken = default)
     {
-        var client = new ChatClient(model: "gpt-4o-mini", apiKey: _apiKey);
-
         var prompt = @$"
 Você é um coordenador de engenharia experiente.
 
@@ -48,8 +51,55 @@ Dados da squad:
 - Bloqueios: {squad.Bloqueios}
 ";
 
-        var response = await client.CompleteChatAsync(prompt);
+        _logger.LogInformation(
+            "Iniciando análise da IA para squad {NomeSquad}.",
+            squad.NomeSquad);
+
+        var completionTask = _chatClient.CompleteChatAsync(prompt);
+        var timeoutTask = Task.Delay(TimeoutAnalise, cancellationToken);
+
+        var completedTask = await Task.WhenAny(completionTask, timeoutTask);
+
+        if (completedTask == timeoutTask)
+        {
+            _logger.LogWarning(
+                "Timeout ao chamar IA para squad {NomeSquad} após {TimeoutSeconds}s.",
+                squad.NomeSquad,
+                TimeoutAnalise.TotalSeconds);
+
+            throw new TimeoutException("A chamada para a IA excedeu o tempo limite de 30 segundos.");
+        }
+
+        var response = await completionTask;
+
+        if (response?.Value is null)
+        {
+            _logger.LogWarning(
+                "A IA retornou resposta nula para squad {NomeSquad}.",
+                squad.NomeSquad);
+
+            throw new InvalidOperationException("Resposta vazia da IA.");
+        }
+
+        if (response.Value.Content.Count == 0)
+        {
+            _logger.LogWarning(
+                "A IA retornou Content vazio para squad {NomeSquad}.",
+                squad.NomeSquad);
+
+            throw new InvalidOperationException("Resposta vazia da IA.");
+        }
+
         var json = response.Value.Content[0].Text;
+
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            _logger.LogWarning(
+                "A IA retornou texto vazio para squad {NomeSquad}.",
+                squad.NomeSquad);
+
+            throw new InvalidOperationException("Resposta vazia da IA.");
+        }
 
         try
         {
@@ -61,15 +111,26 @@ Dados da squad:
                 });
 
             if (resultado is null)
-                throw new InvalidOperationException("A resposta da IA veio vazia.");
+            {
+                _logger.LogWarning(
+                    "Falha ao desserializar resposta da IA para squad {NomeSquad}. Tamanho do conteúdo: {Length}.",
+                    squad.NomeSquad,
+                    json.Length);
+
+                throw new InvalidOperationException("Falha ao interpretar resposta da IA.");
+            }
 
             return resultado;
         }
-        catch (Exception ex)
+        catch (JsonException ex)
         {
-            throw new InvalidOperationException(
-                $"Não foi possível converter a resposta da IA em JSON válido. Resposta recebida: {json}",
-                ex);
+            _logger.LogWarning(
+                ex,
+                "AI response parsing failed for squad {NomeSquad}. Length: {Length}.",
+                squad.NomeSquad,
+                json.Length);
+
+            throw new InvalidOperationException("Falha ao interpretar resposta da IA.");
         }
     }
 }

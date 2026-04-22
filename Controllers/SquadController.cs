@@ -1,7 +1,9 @@
+using System.ComponentModel;
 using System.Text;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
 using SquadIA.Data;
 using SquadIA.Models;
@@ -11,24 +13,37 @@ namespace SquadIA.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
+[Produces("application/json")]
 public class SquadController : ControllerBase
 {
     private readonly IAService _iaService;
     private readonly ApplicationDbContext _context;
     private readonly ILogger<SquadController> _logger;
+    private readonly IMemoryCache _cache;
 
     public SquadController(
         IAService iaService,
         ApplicationDbContext context,
-        ILogger<SquadController> logger)
+        ILogger<SquadController> logger,
+        IMemoryCache cache)
     {
         _iaService = iaService;
         _context = context;
         _logger = logger;
+        _cache = cache;
     }
 
+    /// <summary>
+    /// Analisa uma squad com apoio de IA com base nas métricas informadas.
+    /// </summary>
+    /// <param name="squad">Métricas da squad a serem analisadas.</param>
+    /// <param name="cancellationToken">Token para cancelamento da operação.</param>
+    /// <returns>Diagnóstico estruturado com problemas, ações, prioridade, resumo executivo e score de saúde.</returns>
     [HttpPost("analisar")]
     [EnableRateLimiting("openai")]
+    [ProducesResponseType(typeof(AnaliseResultado), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
     public async Task<ActionResult<AnaliseResultado>> Analisar(
         [FromBody] SquadMetrics squad,
         CancellationToken cancellationToken)
@@ -70,6 +85,8 @@ public class SquadController : ControllerBase
         _context.HistoricosAnalise.Add(historico);
         await _context.SaveChangesAsync(cancellationToken);
 
+        InvalidarCacheDashboard();
+
         _logger.LogInformation(
             "Análise salva com sucesso para squad {NomeSquad} com prioridade {Prioridade}.",
             historico.NomeSquad,
@@ -78,13 +95,23 @@ public class SquadController : ControllerBase
         return Ok(resultado);
     }
 
+    /// <summary>
+    /// Lista o histórico de análises com suporte a filtro e paginação.
+    /// </summary>
+    /// <param name="nomeSquad">Filtro opcional por nome da squad.</param>
+    /// <param name="dataInicial">Filtro opcional de data inicial.</param>
+    /// <param name="dataFinal">Filtro opcional de data final.</param>
+    /// <param name="pagina">Página desejada. Padrão: 1.</param>
+    /// <param name="tamanhoPagina">Quantidade de itens por página. Padrão: 10.</param>
+    /// <param name="cancellationToken">Token para cancelamento da operação.</param>
     [HttpGet("historico")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
     public async Task<ActionResult<object>> ListarHistorico(
-        [FromQuery] string? nomeSquad,
-        [FromQuery] DateTime? dataInicial,
-        [FromQuery] DateTime? dataFinal,
-        [FromQuery] int pagina = 1,
-        [FromQuery] int tamanhoPagina = 10,
+        [FromQuery, Description("Filtro opcional por nome da squad. Ex.: Payments")] string? nomeSquad,
+        [FromQuery, Description("Data inicial no formato yyyy-MM-dd. Ex.: 2026-04-01")] DateTime? dataInicial,
+        [FromQuery, Description("Data final no formato yyyy-MM-dd. Ex.: 2026-04-30")] DateTime? dataFinal,
+        [FromQuery, Description("Página atual. Padrão: 1")] int pagina = 1,
+        [FromQuery, Description("Tamanho da página. Máximo: 100")] int tamanhoPagina = 10,
         CancellationToken cancellationToken = default)
     {
         if (pagina < 1)
@@ -136,7 +163,14 @@ public class SquadController : ControllerBase
         });
     }
 
+    /// <summary>
+    /// Busca um item específico do histórico pelo identificador.
+    /// </summary>
+    /// <param name="id">Identificador do histórico.</param>
+    /// <param name="cancellationToken">Token para cancelamento da operação.</param>
     [HttpGet("historico/{id:int}")]
+    [ProducesResponseType(typeof(HistoricoAnalise), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<HistoricoAnalise>> ObterHistoricoPorId(
         int id,
         CancellationToken cancellationToken)
@@ -151,13 +185,29 @@ public class SquadController : ControllerBase
         return Ok(item);
     }
 
+    /// <summary>
+    /// Retorna um resumo agregado das análises para uso em dashboard.
+    /// </summary>
+    /// <param name="nomeSquad">Filtro opcional por nome da squad.</param>
+    /// <param name="dataInicial">Filtro opcional de data inicial.</param>
+    /// <param name="dataFinal">Filtro opcional de data final.</param>
+    /// <param name="cancellationToken">Token para cancelamento da operação.</param>
     [HttpGet("dashboard")]
+    [ProducesResponseType(typeof(DashboardResumo), StatusCodes.Status200OK)]
     public async Task<ActionResult<DashboardResumo>> ObterDashboard(
-        [FromQuery] string? nomeSquad,
-        [FromQuery] DateTime? dataInicial,
-        [FromQuery] DateTime? dataFinal,
+        [FromQuery, Description("Filtro opcional por nome da squad. Ex.: Payments")] string? nomeSquad,
+        [FromQuery, Description("Data inicial no formato yyyy-MM-dd. Ex.: 2026-04-01")] DateTime? dataInicial,
+        [FromQuery, Description("Data final no formato yyyy-MM-dd. Ex.: 2026-04-30")] DateTime? dataFinal,
         CancellationToken cancellationToken)
     {
+        var cacheKey = GerarChaveCacheDashboard(nomeSquad, dataInicial, dataFinal);
+
+        if (_cache.TryGetValue(cacheKey, out DashboardResumo? dashboardCacheado) && dashboardCacheado is not null)
+        {
+            _logger.LogInformation("Dashboard retornado do cache. Key: {CacheKey}", cacheKey);
+            return Ok(dashboardCacheado);
+        }
+
         var query = _context.HistoricosAnalise.AsNoTracking().AsQueryable();
 
         if (!string.IsNullOrWhiteSpace(nomeSquad))
@@ -182,9 +232,11 @@ public class SquadController : ControllerBase
             .OrderByDescending(x => x.CriadoEm)
             .ToListAsync(cancellationToken);
 
+        DashboardResumo dashboard;
+
         if (historicos.Count == 0)
         {
-            return Ok(new DashboardResumo
+            dashboard = new DashboardResumo
             {
                 TotalAnalises = 0,
                 MediaScoreSaude = 0,
@@ -193,30 +245,51 @@ public class SquadController : ControllerBase
                 PrioridadeBaixa = 0,
                 UltimaSquadAnalisada = null,
                 UltimaAnaliseEm = null
-            });
+            };
+        }
+        else
+        {
+            var ultima = historicos.First();
+
+            dashboard = new DashboardResumo
+            {
+                TotalAnalises = historicos.Count,
+                MediaScoreSaude = Math.Round(historicos.Average(x => x.ScoreSaude), 2),
+                PrioridadeAlta = historicos.Count(x => NormalizarPrioridade(x.Prioridade) == "Alta"),
+                PrioridadeMedia = historicos.Count(x => NormalizarPrioridade(x.Prioridade) == "Media"),
+                PrioridadeBaixa = historicos.Count(x => NormalizarPrioridade(x.Prioridade) == "Baixa"),
+                UltimaSquadAnalisada = ultima.NomeSquad,
+                UltimaAnaliseEm = ultima.CriadoEm
+            };
         }
 
-        var ultima = historicos.First();
+        _cache.Set(
+            cacheKey,
+            dashboard,
+            new MemoryCacheEntryOptions
+            {
+                AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(5)
+            });
 
-        var dashboard = new DashboardResumo
-        {
-            TotalAnalises = historicos.Count,
-            MediaScoreSaude = Math.Round(historicos.Average(x => x.ScoreSaude), 2),
-            PrioridadeAlta = historicos.Count(x => NormalizarPrioridade(x.Prioridade) == "Alta"),
-            PrioridadeMedia = historicos.Count(x => NormalizarPrioridade(x.Prioridade) == "Media"),
-            PrioridadeBaixa = historicos.Count(x => NormalizarPrioridade(x.Prioridade) == "Baixa"),
-            UltimaSquadAnalisada = ultima.NomeSquad,
-            UltimaAnaliseEm = ultima.CriadoEm
-        };
+        _logger.LogInformation("Dashboard calculado e salvo no cache. Key: {CacheKey}", cacheKey);
 
         return Ok(dashboard);
     }
 
+    /// <summary>
+    /// Exporta o histórico de análises em formato CSV.
+    /// </summary>
+    /// <param name="nomeSquad">Filtro opcional por nome da squad.</param>
+    /// <param name="dataInicial">Filtro opcional de data inicial.</param>
+    /// <param name="dataFinal">Filtro opcional de data final.</param>
+    /// <param name="cancellationToken">Token para cancelamento da operação.</param>
     [HttpGet("exportar")]
+    [Produces("text/csv")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
     public async Task<IActionResult> ExportarHistorico(
-        [FromQuery] string? nomeSquad,
-        [FromQuery] DateTime? dataInicial,
-        [FromQuery] DateTime? dataFinal,
+        [FromQuery, Description("Filtro opcional por nome da squad. Ex.: Payments")] string? nomeSquad,
+        [FromQuery, Description("Data inicial no formato yyyy-MM-dd. Ex.: 2026-04-01")] DateTime? dataInicial,
+        [FromQuery, Description("Data final no formato yyyy-MM-dd. Ex.: 2026-04-30")] DateTime? dataFinal,
         CancellationToken cancellationToken)
     {
         var query = _context.HistoricosAnalise.AsNoTracking().AsQueryable();
@@ -263,6 +336,21 @@ public class SquadController : ControllerBase
         var bytes = Encoding.UTF8.GetBytes(csv.ToString());
 
         return File(bytes, "text/csv", "historico-squads.csv");
+    }
+
+    private void InvalidarCacheDashboard()
+    {
+        _cache.Remove("dashboard:all");
+        _logger.LogInformation("Cache padrão do dashboard invalidado.");
+    }
+
+    private static string GerarChaveCacheDashboard(string? nomeSquad, DateTime? dataInicial, DateTime? dataFinal)
+    {
+        var nome = string.IsNullOrWhiteSpace(nomeSquad) ? "all" : nomeSquad.Trim().ToLower();
+        var inicio = dataInicial?.ToString("yyyyMMdd") ?? "null";
+        var fim = dataFinal?.ToString("yyyyMMdd") ?? "null";
+
+        return $"dashboard:{nome}:{inicio}:{fim}";
     }
 
     private static string NormalizarPrioridade(string? prioridade)

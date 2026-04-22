@@ -1,6 +1,56 @@
 @SquadIA_HostAddress = http://localhost:5103
 
-GET {{SquadIA_HostAddress}}/weatherforecast/
+### Health-like check via dashboard
+GET {{SquadIA_HostAddress}}/api/Squad/dashboard
 Accept: application/json
 
 ###
+
+### Criar nova análise
+POST {{SquadIA_HostAddress}}/api/Squad/analisar
+Content-Type: application/json
+Accept: application/json
+
+{
+  "nomeSquad": "Payments Squad",
+  "leadTimeMedio": 70,
+  "throughput": 8,
+  "bugs": 20,
+  "bloqueios": 6
+}
+
+###
+
+### Listar histórico paginado
+GET {{SquadIA_HostAddress}}/api/Squad/historico?pagina=1&tamanhoPagina=5
+Accept: application/json
+
+###
+
+### Filtrar histórico por squad
+GET {{SquadIA_HostAddress}}/api/Squad/historico?nomeSquad=Payments&pagina=1&tamanhoPagina=5
+Accept: application/json
+
+###
+
+### Filtrar histórico por período
+GET {{SquadIA_HostAddress}}/api/Squad/historico?dataInicial=2026-04-01&dataFinal=2026-04-30
+Accept: application/json
+
+###
+
+### Buscar histórico por ID
+GET {{SquadIA_HostAddress}}/api/Squad/historico/1
+Accept: application/json
+
+###
+
+### Dashboard com filtro por squad
+GET {{SquadIA_HostAddress}}/api/Squad/dashboard?nomeSquad=Payments
+Accept: application/json
+
+###
+
+### Exportar CSV
+GET {{SquadIA_HostAddress}}/api/Squad/exportar?nomeSquad=Payments
+Accept: text/csv

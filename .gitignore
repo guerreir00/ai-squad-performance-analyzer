@@ -1,3 +1,4 @@
+# BACKEND
 bin/
 obj/
 .vs/
@@ -5,7 +6,15 @@ obj/
 *.user
 *.suo
 *.db
+
 appsettings.Development.json
+
+# NODE
+node_modules/
+.vite/
+dist/
+
+# FRONT
 squadia-front/node_modules/
 squadia-front/.vite/
 squadia-front/dist/

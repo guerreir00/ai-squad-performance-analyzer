@@ -1,5 +1,18 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import type { FormEvent, ReactNode } from "react";
 import axios from "axios";
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip,
+  ResponsiveContainer,
+  CartesianGrid,
+  LineChart,
+  Line,
+} from "recharts";
+import "./App.css";
 
 type SquadMetrics = {
   nomeSquad: string;
@@ -32,6 +45,14 @@ type HistoricoAnalise = {
   criadoEm: string;
 };
 
+type HistoricoResponse = {
+  paginaAtual: number;
+  tamanhoPagina: number;
+  totalItens: number;
+  totalPaginas: number;
+  itens: HistoricoAnalise[];
+};
+
 type DashboardResumo = {
   totalAnalises: number;
   mediaScoreSaude: number;
@@ -40,14 +61,6 @@ type DashboardResumo = {
   prioridadeBaixa: number;
   ultimaSquadAnalisada: string | null;
   ultimaAnaliseEm: string | null;
-};
-
-type HistoricoResponse = {
-  paginaAtual: number;
-  tamanhoPagina: number;
-  totalItens: number;
-  totalPaginas: number;
-  itens: HistoricoAnalise[];
 };
 
 const api = axios.create({
@@ -67,363 +80,724 @@ export default function App() {
   const [dashboard, setDashboard] = useState<DashboardResumo | null>(null);
   const [historico, setHistorico] = useState<HistoricoResponse | null>(null);
   const [loading, setLoading] = useState(false);
-
-  const [filtros, setFiltros] = useState({
-    nomeSquad: "",
-    dataInicial: "",
-    dataFinal: "",
-    pagina: 1,
-    tamanhoPagina: 5,
-  });
+  const [paginaHistorico, setPaginaHistorico] = useState(1);
 
   async function carregarDashboard() {
-    const params: Record<string, string | number> = {};
-
-    if (filtros.nomeSquad) params.nomeSquad = filtros.nomeSquad;
-    if (filtros.dataInicial) params.dataInicial = filtros.dataInicial;
-    if (filtros.dataFinal) params.dataFinal = filtros.dataFinal;
-
-    const response = await api.get<DashboardResumo>("/Squad/dashboard", { params });
-    setDashboard(response.data);
+    const res = await api.get<DashboardResumo>("/Squad/dashboard");
+    setDashboard(res.data);
   }
 
-  async function carregarHistorico() {
-    const params: Record<string, string | number> = {
-      pagina: filtros.pagina,
-      tamanhoPagina: filtros.tamanhoPagina,
-    };
+  async function carregarHistorico(pagina = paginaHistorico) {
+    const res = await api.get<HistoricoResponse>("/Squad/historico", {
+      params: {
+        pagina,
+        tamanhoPagina: 8,
+      },
+    });
 
-    if (filtros.nomeSquad) params.nomeSquad = filtros.nomeSquad;
-    if (filtros.dataInicial) params.dataInicial = filtros.dataInicial;
-    if (filtros.dataFinal) params.dataFinal = filtros.dataFinal;
-
-    const response = await api.get<HistoricoResponse>("/Squad/historico", { params });
-    setHistorico(response.data);
+    setHistorico(res.data);
   }
 
-  async function carregarDados() {
-    await Promise.all([carregarDashboard(), carregarHistorico()]);
+  async function carregarDados(pagina = paginaHistorico) {
+    await Promise.all([carregarDashboard(), carregarHistorico(pagina)]);
   }
 
   useEffect(() => {
-    carregarDados();
-  }, [filtros.pagina]);
+    carregarDados(paginaHistorico);
+  }, [paginaHistorico]);
 
-  async function analisarSquad(e: React.FormEvent) {
+  const prioridadeData = useMemo(() => {
+    if (!dashboard) return [];
+
+    return [
+      {
+        name: "Críticas",
+        value: dashboard.prioridadeAlta,
+        description: "Exigem ação imediata",
+      },
+      {
+        name: "Em atenção",
+        value: dashboard.prioridadeMedia,
+        description: "Precisam ser monitoradas",
+      },
+      {
+        name: "Saudáveis",
+        value: dashboard.prioridadeBaixa,
+        description: "Fluxo sob controle",
+      },
+    ];
+  }, [dashboard]);
+
+  const scoreTrendData = useMemo(() => {
+    if (!historico?.itens) return [];
+
+    return [...historico.itens]
+      .slice()
+      .reverse()
+      .map((item) => ({
+        name: item.nomeSquad.replace(" Squad", ""),
+        score: item.scoreSaude,
+      }));
+  }, [historico]);
+
+  const piorSquad = useMemo(() => {
+    if (!historico?.itens?.length) return null;
+
+    return [...historico.itens].sort((a, b) => a.scoreSaude - b.scoreSaude)[0];
+  }, [historico]);
+
+  const melhorSquad = useMemo(() => {
+    if (!historico?.itens?.length) return null;
+
+    return [...historico.itens].sort((a, b) => b.scoreSaude - a.scoreSaude)[0];
+  }, [historico]);
+
+  async function analisarSquad(e: FormEvent) {
     e.preventDefault();
     setLoading(true);
 
     try {
-      const response = await api.post<AnaliseResultado>("/Squad/analisar", form);
-      setResultado(response.data);
-      setFiltros((prev) => ({ ...prev, pagina: 1 }));
-      await carregarDados();
+      const res = await api.post<AnaliseResultado>("/Squad/analisar", form);
+      setResultado(res.data);
+      setPaginaHistorico(1);
+      await carregarDados(1);
     } catch (error) {
-      alert("Erro ao analisar squad.");
       console.error(error);
+      alert("Erro ao analisar squad.");
     } finally {
       setLoading(false);
     }
   }
 
-  function atualizarCampo<K extends keyof SquadMetrics>(campo: K, valor: SquadMetrics[K]) {
+  async function deletarAnalise(id: number) {
+    if (!confirm("Tem certeza que deseja excluir essa análise?")) return;
+
+    try {
+      await api.delete(`/Squad/${id}`);
+
+      if (historico?.itens.length === 1 && paginaHistorico > 1) {
+        setPaginaHistorico((prev) => prev - 1);
+      } else {
+        await carregarDados(paginaHistorico);
+      }
+
+      setResultado(null);
+    } catch (err) {
+      console.error(err);
+      alert("Erro ao deletar análise.");
+    }
+  }
+
+  function atualizarCampo<K extends keyof SquadMetrics>(
+    campo: K,
+    valor: SquadMetrics[K]
+  ) {
     setForm((prev) => ({
       ...prev,
       [campo]: valor,
     }));
   }
 
-  async function aplicarFiltros() {
-    setFiltros((prev) => ({ ...prev, pagina: 1 }));
-    const novosFiltros = { ...filtros, pagina: 1 };
-
-    const paramsDashboard: Record<string, string | number> = {};
-    if (novosFiltros.nomeSquad) paramsDashboard.nomeSquad = novosFiltros.nomeSquad;
-    if (novosFiltros.dataInicial) paramsDashboard.dataInicial = novosFiltros.dataInicial;
-    if (novosFiltros.dataFinal) paramsDashboard.dataFinal = novosFiltros.dataFinal;
-
-    const paramsHistorico: Record<string, string | number> = {
-      pagina: 1,
-      tamanhoPagina: novosFiltros.tamanhoPagina,
-    };
-    if (novosFiltros.nomeSquad) paramsHistorico.nomeSquad = novosFiltros.nomeSquad;
-    if (novosFiltros.dataInicial) paramsHistorico.dataInicial = novosFiltros.dataInicial;
-    if (novosFiltros.dataFinal) paramsHistorico.dataFinal = novosFiltros.dataFinal;
-
-    const [dashboardRes, historicoRes] = await Promise.all([
-      api.get<DashboardResumo>("/Squad/dashboard", { params: paramsDashboard }),
-      api.get<HistoricoResponse>("/Squad/historico", { params: paramsHistorico }),
-    ]);
-
-    setDashboard(dashboardRes.data);
-    setHistorico(historicoRes.data);
+  function preencherExemploRuim() {
+    setForm({
+      nomeSquad: "Payments Squad",
+      leadTimeMedio: 85,
+      throughput: 6,
+      bugs: 28,
+      bloqueios: 10,
+    });
   }
 
-  function limparFiltros() {
-    const filtrosLimpos = {
+  function preencherExemploMedio() {
+    setForm({
+      nomeSquad: "Marketplace Squad",
+      leadTimeMedio: 55,
+      throughput: 10,
+      bugs: 12,
+      bloqueios: 4,
+    });
+  }
+
+  function preencherExemploBom() {
+    setForm({
+      nomeSquad: "Growth Squad",
+      leadTimeMedio: 25,
+      throughput: 18,
+      bugs: 3,
+      bloqueios: 1,
+    });
+  }
+
+  function limparFormulario() {
+    setForm({
       nomeSquad: "",
-      dataInicial: "",
-      dataFinal: "",
-      pagina: 1,
-      tamanhoPagina: 5,
-    };
+      leadTimeMedio: 0,
+      throughput: 0,
+      bugs: 0,
+      bloqueios: 0,
+    });
 
-    setFiltros(filtrosLimpos);
+    setResultado(null);
+  }
 
-    setTimeout(() => {
-      carregarDados();
-    }, 0);
+  function getPrioridadeClass(prioridade: string) {
+    const valor = prioridade.toLowerCase();
+
+    if (valor.includes("alta")) return "danger";
+    if (valor.includes("media") || valor.includes("média")) return "warning";
+    if (valor.includes("baixa")) return "success";
+
+    return "neutral";
+  }
+
+  function getScoreClass(score: number) {
+    if (score < 50) return "danger";
+    if (score < 75) return "warning";
+    return "success";
+  }
+
+  function getScoreLabel(score: number) {
+    if (score < 50) return "Crítico";
+    if (score < 75) return "Em atenção";
+    return "Saudável";
   }
 
   return (
-    <div className="page">
-      <header className="hero">
-        <h1>AI Squad Performance Analyzer</h1>
-        <p>Análise de squads com IA, dashboard e histórico</p>
-      </header>
+    <div className="app">
+      <div className="background-glow" />
 
-      <section className="grid">
-        <div className="card">
-          <h2>Nova análise</h2>
+      <main className="page">
+        <header className="hero">
+          <div>
+            <span className="eyebrow">AI para liderança de engenharia</span>
+            <h1>AI Squad Performance Analyzer</h1>
+            <p>
+              Transforme métricas de squads em diagnóstico, score de saúde e
+              plano de ação com apoio de Inteligência Artificial.
+            </p>
+          </div>
 
-          <form onSubmit={analisarSquad} className="form">
-            <div>
-              <label htmlFor="nomeSquad">Nome da squad</label>
-              <input
-                id="nomeSquad"
-                placeholder="Ex.: Payments Squad"
-                value={form.nomeSquad}
-                onChange={(e) => atualizarCampo("nomeSquad", e.target.value)}
-                required
+          <div className="hero-card">
+            <span>Última squad analisada</span>
+            <strong>{dashboard?.ultimaSquadAnalisada ?? "Nenhuma ainda"}</strong>
+          </div>
+        </header>
+
+        <section className="dashboard-grid">
+          <MetricCard
+            title="Total de análises"
+            value={dashboard?.totalAnalises ?? 0}
+            description="Histórico salvo no banco"
+          />
+
+          <MetricCard
+            title="Score médio"
+            value={dashboard?.mediaScoreSaude ?? 0}
+            description={getScoreLabel(dashboard?.mediaScoreSaude ?? 0)}
+            variant={getScoreClass(dashboard?.mediaScoreSaude ?? 0)}
+          />
+
+          <MetricCard
+            title="Squads críticas"
+            value={dashboard?.prioridadeAlta ?? 0}
+            description="Exigem ação imediata"
+            variant="danger"
+          />
+
+          <MetricCard
+            title="Squads saudáveis"
+            value={dashboard?.prioridadeBaixa ?? 0}
+            description="Fluxo sob controle"
+            variant="success"
+          />
+        </section>
+
+        <section className="executive-grid">
+          <div className="card insight-card">
+            <span className="eyebrow">Visão executiva</span>
+            <h2>Resumo da saúde das squads</h2>
+            <p>
+              Este painel mostra a distribuição de risco das squads analisadas,
+              destacando onde há necessidade de ação imediata e onde o fluxo está
+              mais saudável.
+            </p>
+
+            <div className="executive-list">
+              <ExecutiveItem
+                label="Squad mais crítica"
+                value={piorSquad?.nomeSquad ?? "-"}
+                description={
+                  piorSquad
+                    ? `Score ${piorSquad.scoreSaude} — ${getScoreLabel(
+                        piorSquad.scoreSaude
+                      )}`
+                    : "Sem dados suficientes"
+                }
+                variant="danger"
+              />
+
+              <ExecutiveItem
+                label="Melhor squad"
+                value={melhorSquad?.nomeSquad ?? "-"}
+                description={
+                  melhorSquad
+                    ? `Score ${melhorSquad.scoreSaude} — ${getScoreLabel(
+                        melhorSquad.scoreSaude
+                      )}`
+                    : "Sem dados suficientes"
+                }
+                variant="success"
               />
             </div>
+          </div>
 
-            <div>
-              <label htmlFor="leadTimeMedio">Lead Time Médio (em dias)</label>
-              <input
-                id="leadTimeMedio"
-                type="number"
-                min="0"
-                placeholder="Ex.: 70"
-                value={form.leadTimeMedio}
-                onChange={(e) => atualizarCampo("leadTimeMedio", Number(e.target.value))}
-                required
-              />
-              <small>Tempo médio para concluir uma entrega.</small>
-            </div>
+          <div className="card insight-card">
+            <span className="eyebrow">Leitura rápida</span>
+            <h2>Como interpretar</h2>
 
-            <div>
-              <label htmlFor="throughput">Throughput</label>
-              <input
-                id="throughput"
-                type="number"
-                min="0"
-                placeholder="Ex.: 8"
-                value={form.throughput}
-                onChange={(e) => atualizarCampo("throughput", Number(e.target.value))}
-                required
-              />
-              <small>Quantidade de entregas concluídas no período.</small>
-            </div>
-
-            <div>
-              <label htmlFor="bugs">Quantidade de bugs</label>
-              <input
-                id="bugs"
-                type="number"
-                min="0"
-                placeholder="Ex.: 20"
-                value={form.bugs}
-                onChange={(e) => atualizarCampo("bugs", Number(e.target.value))}
-                required
-              />
-              <small>Total de bugs identificados no período analisado.</small>
-            </div>
-
-            <div>
-              <label htmlFor="bloqueios">Quantidade de bloqueios</label>
-              <input
-                id="bloqueios"
-                type="number"
-                min="0"
-                placeholder="Ex.: 6"
-                value={form.bloqueios}
-                onChange={(e) => atualizarCampo("bloqueios", Number(e.target.value))}
-                required
-              />
-              <small>Impedimentos que afetaram o fluxo da squad.</small>
-            </div>
-
-            <button type="submit" disabled={loading}>
-              {loading ? "Analisando..." : "Analisar squad"}
-            </button>
-          </form>
-        </div>
-
-        <div className="card">
-          <h2>Dashboard</h2>
-
-          {dashboard ? (
-            <div className="stats">
-              <div className="stat">
-                <span>Total de análises</span>
-                <strong>{dashboard.totalAnalises}</strong>
+            <div className="interpretation">
+              <div>
+                <strong>🔴 Críticas</strong>
+                <p>Alto risco operacional. Exigem ação rápida.</p>
               </div>
 
-              <div className="stat">
-                <span>Média score saúde</span>
-                <strong>{dashboard.mediaScoreSaude}</strong>
+              <div>
+                <strong>🟡 Em atenção</strong>
+                <p>Performance intermediária. Precisam monitoramento.</p>
               </div>
 
-              <div className="stat">
-                <span>Prioridade alta</span>
-                <strong>{dashboard.prioridadeAlta}</strong>
+              <div>
+                <strong>🟢 Saudáveis</strong>
+                <p>Boa previsibilidade, baixo atrito e fluxo controlado.</p>
               </div>
-
-              <div className="stat">
-                <span>Prioridade média</span>
-                <strong>{dashboard.prioridadeMedia}</strong>
-              </div>
-
-              <div className="stat">
-                <span>Prioridade baixa</span>
-                <strong>{dashboard.prioridadeBaixa}</strong>
-              </div>
-
-              <div className="stat">
-                <span>Última squad</span>
-                <strong>{dashboard.ultimaSquadAnalisada ?? "-"}</strong>
-              </div>
-            </div>
-          ) : (
-            <p>Carregando dashboard...</p>
-          )}
-        </div>
-      </section>
-
-      {resultado && (
-        <section className="card result-card">
-          <h2>Resultado da análise</h2>
-
-          <p><strong>Diagnóstico:</strong> {resultado.diagnostico}</p>
-          <p><strong>Resumo executivo:</strong> {resultado.resumoExecutivo}</p>
-          <p><strong>Prioridade:</strong> {resultado.prioridade}</p>
-          <p><strong>Score de saúde:</strong> {resultado.scoreSaude}</p>
-
-          <div className="columns">
-            <div>
-              <h3>Problemas</h3>
-              <ul>
-                {resultado.problemas.map((item, index) => (
-                  <li key={index}>{item}</li>
-                ))}
-              </ul>
-            </div>
-
-            <div>
-              <h3>Ações</h3>
-              <ul>
-                {resultado.acoes.map((item, index) => (
-                  <li key={index}>{item}</li>
-                ))}
-              </ul>
             </div>
           </div>
         </section>
-      )}
 
-      <section className="card">
-        <h2>Filtros</h2>
+        <section className="content-grid">
+          <div className="card form-card">
+            <div className="section-header">
+              <div>
+                <h2>Nova análise</h2>
+                <p>
+                  Preencha os dados ou use uma simulação pronta para gravar sua
+                  demo.
+                </p>
+              </div>
+            </div>
 
-        <div className="filters">
-          <input
-            placeholder="Filtrar por squad"
-            value={filtros.nomeSquad}
-            onChange={(e) => setFiltros((prev) => ({ ...prev, nomeSquad: e.target.value }))}
-          />
+            <div className="demo-actions">
+              <button
+                type="button"
+                className="ghost danger"
+                onClick={preencherExemploRuim}
+              >
+                Exemplo crítico
+              </button>
 
-          <input
-            type="date"
-            value={filtros.dataInicial}
-            onChange={(e) => setFiltros((prev) => ({ ...prev, dataInicial: e.target.value }))}
-          />
+              <button
+                type="button"
+                className="ghost warning"
+                onClick={preencherExemploMedio}
+              >
+                Exemplo médio
+              </button>
 
-          <input
-            type="date"
-            value={filtros.dataFinal}
-            onChange={(e) => setFiltros((prev) => ({ ...prev, dataFinal: e.target.value }))}
-          />
+              <button
+                type="button"
+                className="ghost success"
+                onClick={preencherExemploBom}
+              >
+                Exemplo saudável
+              </button>
+            </div>
 
-          <button type="button" onClick={aplicarFiltros}>
-            Aplicar filtros
-          </button>
+            <form onSubmit={analisarSquad} className="form">
+              <Field label="Nome da squad" hint="Ex.: Payments Squad">
+                <input
+                  placeholder="Payments Squad"
+                  value={form.nomeSquad}
+                  onChange={(e) => atualizarCampo("nomeSquad", e.target.value)}
+                  required
+                />
+              </Field>
 
-          <button type="button" className="secondary" onClick={limparFiltros}>
-            Limpar
-          </button>
-        </div>
-      </section>
+              <Field
+                label="Lead Time médio (dias)"
+                hint="Tempo médio para uma demanda sair da entrada até a conclusão."
+              >
+                <input
+                  type="number"
+                  min="0"
+                  placeholder="Ex.: 85"
+                  value={form.leadTimeMedio}
+                  onChange={(e) =>
+                    atualizarCampo("leadTimeMedio", Number(e.target.value))
+                  }
+                  required
+                />
+              </Field>
 
-      <section className="card">
-        <h2>Histórico</h2>
+              <Field
+                label="Throughput (itens/semana)"
+                hint="Quantidade de entregas finalizadas no período analisado."
+              >
+                <input
+                  type="number"
+                  min="0"
+                  placeholder="Ex.: 6"
+                  value={form.throughput}
+                  onChange={(e) =>
+                    atualizarCampo("throughput", Number(e.target.value))
+                  }
+                  required
+                />
+              </Field>
 
-        {!historico ? (
-          <p>Carregando histórico...</p>
-        ) : historico.itens.length === 0 ? (
-          <p>Nenhum registro encontrado.</p>
-        ) : (
-          <>
-            <div className="history-list">
-              {historico.itens.map((item) => (
-                <div className="history-item" key={item.id}>
-                  <div className="history-top">
-                    <strong>{item.nomeSquad}</strong>
-                    <span>{new Date(item.criadoEm).toLocaleString("pt-BR")}</span>
-                  </div>
+              <Field
+                label="Bugs nos últimos 30 dias"
+                hint="Total de defeitos reportados ou encontrados no período."
+              >
+                <input
+                  type="number"
+                  min="0"
+                  placeholder="Ex.: 28"
+                  value={form.bugs}
+                  onChange={(e) => atualizarCampo("bugs", Number(e.target.value))}
+                  required
+                />
+              </Field>
 
-                  <p><strong>Diagnóstico:</strong> {item.diagnostico}</p>
-                  <p><strong>Resumo:</strong> {item.resumoExecutivo}</p>
+              <Field
+                label="Bloqueios nos últimos 30 dias"
+                hint="Impedimentos que atrasaram ou pararam o fluxo da squad."
+              >
+                <input
+                  type="number"
+                  min="0"
+                  placeholder="Ex.: 10"
+                  value={form.bloqueios}
+                  onChange={(e) =>
+                    atualizarCampo("bloqueios", Number(e.target.value))
+                  }
+                  required
+                />
+              </Field>
 
-                  <div className="badges">
-                    <span className="badge">Prioridade: {item.prioridade}</span>
-                    <span className="badge">Score: {item.scoreSaude}</span>
-                    <span className="badge">Lead Time: {item.leadTimeMedio}</span>
-                    <span className="badge">Throughput: {item.throughput}</span>
-                  </div>
+              <div className="form-actions">
+                <button type="submit" disabled={loading}>
+                  {loading ? "Analisando com IA..." : "Analisar squad"}
+                </button>
+
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={limparFormulario}
+                >
+                  Limpar
+                </button>
+              </div>
+            </form>
+          </div>
+
+          <div className="charts-stack">
+            <div className="card chart-card">
+              <div className="section-header">
+                <div>
+                  <h2>Distribuição de risco</h2>
+                  <p>Quantidade de squads por nível de atenção.</p>
                 </div>
-              ))}
+              </div>
+
+              <div className="chart-box">
+                {prioridadeData.length > 0 ? (
+                  <ResponsiveContainer width="100%" height={250}>
+                    <BarChart data={prioridadeData}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#263449" />
+                      <XAxis dataKey="name" stroke="#94a3b8" />
+                      <YAxis allowDecimals={false} stroke="#94a3b8" />
+                      <Tooltip
+                        formatter={(value, _name, item) => [
+                          `${value} análise(s)`,
+                          item.payload.description,
+                        ]}
+                        contentStyle={{
+                          background: "#111827",
+                          border: "1px solid #334155",
+                          borderRadius: 12,
+                          color: "#e5e7eb",
+                        }}
+                      />
+                      <Bar dataKey="value" fill="#38bdf8" radius={[8, 8, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <div className="empty-chart">
+                    Nenhuma análise encontrada ainda.
+                  </div>
+                )}
+              </div>
             </div>
 
-            <div className="pagination">
-              <button
-                type="button"
-                className="secondary"
-                disabled={historico.paginaAtual <= 1}
-                onClick={() =>
-                  setFiltros((prev) => ({ ...prev, pagina: prev.pagina - 1 }))
-                }
-              >
-                Anterior
-              </button>
+            <div className="card chart-card">
+              <div className="section-header">
+                <div>
+                  <h2>Evolução do score</h2>
+                  <p>Últimas análises ordenadas por data.</p>
+                </div>
+              </div>
 
-              <span>
-                Página {historico.paginaAtual} de {historico.totalPaginas || 1}
-              </span>
-
-              <button
-                type="button"
-                className="secondary"
-                disabled={historico.paginaAtual >= historico.totalPaginas}
-                onClick={() =>
-                  setFiltros((prev) => ({ ...prev, pagina: prev.pagina + 1 }))
-                }
-              >
-                Próxima
-              </button>
+              <div className="chart-box small">
+                {scoreTrendData.length > 0 ? (
+                  <ResponsiveContainer width="100%" height={220}>
+                    <LineChart data={scoreTrendData}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#263449" />
+                      <XAxis dataKey="name" stroke="#94a3b8" />
+                      <YAxis domain={[0, 100]} stroke="#94a3b8" />
+                      <Tooltip
+                        contentStyle={{
+                          background: "#111827",
+                          border: "1px solid #334155",
+                          borderRadius: 12,
+                          color: "#e5e7eb",
+                        }}
+                      />
+                      <Line
+                        type="monotone"
+                        dataKey="score"
+                        stroke="#22c55e"
+                        strokeWidth={3}
+                        dot={{ r: 4 }}
+                      />
+                    </LineChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <div className="empty-chart">
+                    Nenhuma análise encontrada ainda.
+                  </div>
+                )}
+              </div>
             </div>
-          </>
+          </div>
+        </section>
+
+        {resultado && (
+          <section className="card result-card">
+            <div className="result-header">
+              <div>
+                <span className="eyebrow">Resultado da IA</span>
+                <h2>{form.nomeSquad || "Squad analisada"}</h2>
+              </div>
+
+              <div className={`score-badge ${getScoreClass(resultado.scoreSaude)}`}>
+                <span>Score de saúde</span>
+                <strong>{resultado.scoreSaude}</strong>
+              </div>
+            </div>
+
+            <div className="result-summary">
+              <div>
+                <h3>Resumo executivo</h3>
+                <p>{resultado.resumoExecutivo}</p>
+              </div>
+
+              <div>
+                <h3>Prioridade</h3>
+                <span
+                  className={`priority ${getPrioridadeClass(
+                    resultado.prioridade
+                  )}`}
+                >
+                  {resultado.prioridade}
+                </span>
+              </div>
+            </div>
+
+            <div className="diagnostic">
+              <h3>Diagnóstico</h3>
+              <p>{resultado.diagnostico}</p>
+            </div>
+
+            <div className="result-columns">
+              <div className="insight-box">
+                <h3>Problemas identificados</h3>
+                <ul>
+                  {resultado.problemas.map((item, index) => (
+                    <li key={index}>{item}</li>
+                  ))}
+                </ul>
+              </div>
+
+              <div className="insight-box">
+                <h3>Ações recomendadas</h3>
+                <ul>
+                  {resultado.acoes.map((item, index) => (
+                    <li key={index}>{item}</li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          </section>
         )}
-      </section>
+
+        <section className="card result-card">
+          <div className="section-header">
+            <div>
+              <span className="eyebrow">Histórico</span>
+              <h2>Últimas análises</h2>
+              <p>
+                Acompanhe as análises salvas no banco e use essa visão na sua
+                demo.
+              </p>
+            </div>
+
+            <button type="button" className="secondary" onClick={() => carregarDados()}>
+              Atualizar
+            </button>
+          </div>
+
+          {!historico ? (
+            <div className="empty-chart">Carregando histórico...</div>
+          ) : historico.itens.length === 0 ? (
+            <div className="empty-chart">Nenhuma análise encontrada ainda.</div>
+          ) : (
+            <>
+              <div className="history-grid">
+                {historico.itens.map((item) => (
+                  <div className="history-card" key={item.id}>
+                    <div className="history-card-actions">
+                      <button
+                        type="button"
+                        className="delete-button"
+                        onClick={() => deletarAnalise(item.id)}
+                      >
+                        Excluir
+                      </button>
+                    </div>
+
+                    <div className="history-top">
+                      <div>
+                        <h3>{item.nomeSquad}</h3>
+                        <p>{new Date(item.criadoEm).toLocaleString("pt-BR")}</p>
+                      </div>
+
+                      <div
+                        className={`score-badge compact ${getScoreClass(
+                          item.scoreSaude
+                        )}`}
+                      >
+                        <span>Score</span>
+                        <strong>{item.scoreSaude}</strong>
+                      </div>
+                    </div>
+
+                    <p>
+                      <strong>Resumo:</strong> {item.resumoExecutivo}
+                    </p>
+
+                    <div className="history-metrics">
+                      <span
+                        className={`priority ${getPrioridadeClass(
+                          item.prioridade
+                        )}`}
+                      >
+                        {item.prioridade}
+                      </span>
+
+                      <span>Lead Time: {item.leadTimeMedio}d</span>
+                      <span>Throughput: {item.throughput}</span>
+                      <span>Bugs: {item.bugs}</span>
+                      <span>Bloqueios: {item.bloqueios}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="form-actions pagination-actions">
+                <button
+                  type="button"
+                  className="secondary"
+                  disabled={historico.paginaAtual <= 1}
+                  onClick={() => setPaginaHistorico((prev) => Math.max(1, prev - 1))}
+                >
+                  Anterior
+                </button>
+
+                <span>
+                  Página {historico.paginaAtual} de {historico.totalPaginas || 1}
+                </span>
+
+                <button
+                  type="button"
+                  className="secondary"
+                  disabled={historico.paginaAtual >= historico.totalPaginas}
+                  onClick={() => setPaginaHistorico((prev) => prev + 1)}
+                >
+                  Próxima
+                </button>
+              </div>
+            </>
+          )}
+        </section>
+      </main>
+    </div>
+  );
+}
+
+function Field({
+  label,
+  hint,
+  children,
+}: {
+  label: string;
+  hint: string;
+  children: ReactNode;
+}) {
+  return (
+    <label className="field">
+      <span>{label}</span>
+      {children}
+      <small>{hint}</small>
+    </label>
+  );
+}
+
+function MetricCard({
+  title,
+  value,
+  description,
+  variant = "default",
+}: {
+  title: string;
+  value: number | string;
+  description: string;
+  variant?: "default" | "danger" | "warning" | "success";
+}) {
+  return (
+    <div className={`metric-card ${variant}`}>
+      <span>{title}</span>
+      <strong>{value}</strong>
+      <small>{description}</small>
+    </div>
+  );
+}
+
+function ExecutiveItem({
+  label,
+  value,
+  description,
+  variant,
+}: {
+  label: string;
+  value: string;
+  description: string;
+  variant: "danger" | "success";
+}) {
+  return (
+    <div className={`executive-item ${variant}`}>
+      <span>{label}</span>
+      <strong>{value}</strong>
+      <small>{description}</small>
     </div>
   );
 }

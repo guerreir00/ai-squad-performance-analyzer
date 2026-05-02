@@ -4,7 +4,6 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Memory;
-using Microsoft.Extensions.Logging;
 using SquadIA.Data;
 using SquadIA.Models;
 using SquadIA.Services;
@@ -36,9 +35,6 @@ public class SquadController : ControllerBase
     /// <summary>
     /// Analisa uma squad com apoio de IA com base nas métricas informadas.
     /// </summary>
-    /// <param name="squad">Métricas da squad a serem analisadas.</param>
-    /// <param name="cancellationToken">Token para cancelamento da operação.</param>
-    /// <returns>Diagnóstico estruturado com problemas, ações, prioridade, resumo executivo e score de saúde.</returns>
     [HttpPost("analisar")]
     [EnableRateLimiting("openai")]
     [ProducesResponseType(typeof(AnaliseResultado), StatusCodes.Status200OK)]
@@ -98,12 +94,6 @@ public class SquadController : ControllerBase
     /// <summary>
     /// Lista o histórico de análises com suporte a filtro e paginação.
     /// </summary>
-    /// <param name="nomeSquad">Filtro opcional por nome da squad.</param>
-    /// <param name="dataInicial">Filtro opcional de data inicial.</param>
-    /// <param name="dataFinal">Filtro opcional de data final.</param>
-    /// <param name="pagina">Página desejada. Padrão: 1.</param>
-    /// <param name="tamanhoPagina">Quantidade de itens por página. Padrão: 10.</param>
-    /// <param name="cancellationToken">Token para cancelamento da operação.</param>
     [HttpGet("historico")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     public async Task<ActionResult<object>> ListarHistorico(
@@ -166,8 +156,6 @@ public class SquadController : ControllerBase
     /// <summary>
     /// Busca um item específico do histórico pelo identificador.
     /// </summary>
-    /// <param name="id">Identificador do histórico.</param>
-    /// <param name="cancellationToken">Token para cancelamento da operação.</param>
     [HttpGet("historico/{id:int}")]
     [ProducesResponseType(typeof(HistoricoAnalise), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -186,12 +174,37 @@ public class SquadController : ControllerBase
     }
 
     /// <summary>
+    /// Deleta uma análise do histórico pelo identificador.
+    /// </summary>
+    [HttpDelete("{id:int}")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> DeletarAnalise(
+        int id,
+        CancellationToken cancellationToken)
+    {
+        var analise = await _context.HistoricosAnalise
+            .FirstOrDefaultAsync(x => x.Id == id, cancellationToken);
+
+        if (analise is null)
+            return NotFound("Análise não encontrada.");
+
+        _context.HistoricosAnalise.Remove(analise);
+        await _context.SaveChangesAsync(cancellationToken);
+
+        InvalidarCacheDashboard();
+
+        _logger.LogInformation(
+            "Análise {Id} removida do histórico. Squad: {NomeSquad}.",
+            analise.Id,
+            analise.NomeSquad);
+
+        return NoContent();
+    }
+
+    /// <summary>
     /// Retorna um resumo agregado das análises para uso em dashboard.
     /// </summary>
-    /// <param name="nomeSquad">Filtro opcional por nome da squad.</param>
-    /// <param name="dataInicial">Filtro opcional de data inicial.</param>
-    /// <param name="dataFinal">Filtro opcional de data final.</param>
-    /// <param name="cancellationToken">Token para cancelamento da operação.</param>
     [HttpGet("dashboard")]
     [ProducesResponseType(typeof(DashboardResumo), StatusCodes.Status200OK)]
     public async Task<ActionResult<DashboardResumo>> ObterDashboard(
@@ -279,10 +292,6 @@ public class SquadController : ControllerBase
     /// <summary>
     /// Exporta o histórico de análises em formato CSV.
     /// </summary>
-    /// <param name="nomeSquad">Filtro opcional por nome da squad.</param>
-    /// <param name="dataInicial">Filtro opcional de data inicial.</param>
-    /// <param name="dataFinal">Filtro opcional de data final.</param>
-    /// <param name="cancellationToken">Token para cancelamento da operação.</param>
     [HttpGet("exportar")]
     [Produces("text/csv")]
     [ProducesResponseType(StatusCodes.Status200OK)]
@@ -340,6 +349,7 @@ public class SquadController : ControllerBase
 
     private void InvalidarCacheDashboard()
     {
+        _cache.Remove("dashboard:all:null:null");
         _cache.Remove("dashboard:all");
         _logger.LogInformation("Cache padrão do dashboard invalidado.");
     }

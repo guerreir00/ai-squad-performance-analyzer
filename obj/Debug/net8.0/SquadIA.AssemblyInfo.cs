@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("SquadIA")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+3a4d8224b46317268b2447442b695844b6815b84")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+42cff0a7b63d4023fdf5dd618f2e2370ae12b924")]
 [assembly: System.Reflection.AssemblyProductAttribute("SquadIA")]
 [assembly: System.Reflection.AssemblyTitleAttribute("SquadIA")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
